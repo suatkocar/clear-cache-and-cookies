@@ -1,0 +1,58 @@
+#clear-cache-floating-btn {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  width: 48px;
+  height: 48px;
+  background: #0078D4;
+  border: 1px solid #30363d;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s ease;
+  z-index: 2147483647;
+  color: white;
+}
+
+#clear-cache-floating-btn:hover {
+  background: #006CBE;
+  transform: scale(1.05);
+}
+
+#clear-cache-floating-btn:active {
+  transform: scale(0.95);
+}
+
+#clear-cache-floating-btn.loading {
+  animation: pulse 1s infinite;
+  pointer-events: none;
+}
+
+#clear-cache-floating-btn.loading svg {
+  animation: spin 1s linear infinite;
+}
+
+#clear-cache-floating-btn.success {
+  background: #238636;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
