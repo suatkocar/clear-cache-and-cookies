@@ -25,3 +25,6 @@ dist-ssr
 
 # Store listing notes
 docs/STORE_LISTING.md
+
+# Release zip files
+releases/
