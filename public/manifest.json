@@ -3,6 +3,8 @@
   "name": "Clear Cache & Cookies",
   "version": "1.0.0",
   "description": "Clear cache and cookies for the current website with just one click. Easily manage and delete browsing data.",
+  "author": "Suat Kocar",
+  "homepage_url": "https://github.com/suatkocar/clear-cache-and-cookies",
   "permissions": [
     "browsingData",
     "cookies",
