@@ -2,6 +2,13 @@
 
 A Chrome extension for clearing browsing data (cache, cookies, storage) for the current website with a single click. Built with React, TypeScript, and Vite using Manifest V3.
 
+## Screenshots
+
+| Light Mode | Dark Mode |
+|:----------:|:---------:|
+| ![Light Mode - Data Types](docs/screenshots/light-1.jpg) | ![Dark Mode - Data Types](docs/screenshots/dark-1.jpg) |
+| ![Light Mode - Settings](docs/screenshots/light-2.jpg) | ![Dark Mode - Settings](docs/screenshots/dark-2.jpg) |
+
 ## Features
 
 ### Data Clearing Options
@@ -94,4 +101,4 @@ Email: suatkocar.dev@gmail.com
 
 ## License
 
-MIT License
+This project is licensed under the [MIT License](LICENSE).
