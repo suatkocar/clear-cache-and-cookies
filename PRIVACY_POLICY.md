@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **Clear Cache & Cookies**  
-Last updated: November 27, 2025
+Last updated: December 4, 2025
 
 ## Overview
 
@@ -30,7 +30,9 @@ The extension stores only user preferences (such as which data types to clear an
 ### Stored Preferences Include:
 - Selected data types to clear (cache, cookies, localStorage, etc.)
 - Behavior settings (auto-reload, auto-close, theme preference)
-- Keyboard shortcut preferences
+- Whitelist (sites protected from clearing)
+- Blacklist (sites that trigger auto-clear)
+- UI preferences (theme, notifications)
 
 ## Permissions
 
@@ -40,10 +42,13 @@ The extension requires the following permissions:
 |------------|---------|
 | `browsingData` | To clear cache, cookies, and other browsing data |
 | `storage` | To save user preferences |
-| `tabs` | To reload the current tab after clearing data |
-| `cookies` | To clear cookies for specific domains |
-| `scripting` | To execute scripts for URL cleaning feature |
-| `host_permissions` | To access and clear data for all websites |
+| `tabs` | To reload the current tab and track tab changes |
+| `cookies` | To count and clear cookies for specific domains |
+| `scripting` | To execute scripts for session storage clearing and URL cleaning |
+| `activeTab` | To access the current tab's URL for clearing site-specific data |
+| `notifications` | To show desktop notifications after clearing (optional, can be disabled) |
+| `contextMenus` | To add clear options to the browser's right-click menu |
+| `host_permissions` | To inject floating button and clear data for all websites |
 
 These permissions are used solely for the extension's stated functionality and not for data collection.
 
