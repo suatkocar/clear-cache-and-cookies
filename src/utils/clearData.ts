@@ -1,5 +1,73 @@
-import type { Settings, ClearResult } from '../types/settings';
+import type { Settings, ClearResult, TimeRange } from '../types/settings';
 import { getDomain, getOrigin } from './storage';
+
+// Convert time range to milliseconds
+export function getTimeRangeMs(timeRange: TimeRange): number {
+  const now = Date.now();
+  switch (timeRange) {
+    case 'last15min': return now - (15 * 60 * 1000);
+    case 'lastHour': return now - (60 * 60 * 1000);
+    case 'last24Hours': return now - (24 * 60 * 60 * 1000);
+    case 'lastWeek': return now - (7 * 24 * 60 * 60 * 1000);
+    case 'allTime': return 0;
+    default: return 0;
+  }
+}
+
+// Check if domain is in whitelist
+export function isWhitelisted(url: string, whitelist: string[]): boolean {
+  if (!whitelist || whitelist.length === 0) return false;
+  const domain = getDomain(url);
+  if (!domain) return false;
+  return whitelist.some(w => domain.includes(w) || w.includes(domain));
+}
+
+// Check if domain is in blacklist (always clear)
+export function isBlacklisted(url: string, blacklist: string[]): boolean {
+  if (!blacklist || blacklist.length === 0) return false;
+  const domain = getDomain(url);
+  if (!domain) return false;
+  return blacklist.some(b => domain.includes(b) || b.includes(domain));
+}
+
+// URLs that cannot be scripted by extensions
+const RESTRICTED_URL_PATTERNS = [
+  /^chrome:\/\//i,
+  /^chrome-extension:\/\//i,
+  /^edge:\/\//i,
+  /^about:/i,
+  /^view-source:/i,
+  /^devtools:\/\//i,
+  /^chrome\.google\.com\/webstore/i,
+  /^chromewebstore\.google\.com/i,
+  /^microsoftedge\.microsoft\.com\/addons/i,
+  /^addons\.mozilla\.org/i,
+];
+
+// Check if URL is scriptable (can execute scripts on it)
+export function isScriptableUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return !RESTRICTED_URL_PATTERNS.some(pattern => pattern.test(url));
+}
+
+// Check if tab can be scripted (exists + URL is scriptable + not error page)
+// Single API call for maximum performance
+export async function canScriptTab(tabId: number, url?: string): Promise<boolean> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    
+    // Tab must exist and not be unloaded
+    if (!tab || !tab.id || tab.status === 'unloaded') return false;
+    
+    // Check if URL is scriptable
+    const tabUrl = url || tab.url;
+    if (!isScriptableUrl(tabUrl)) return false;
+    
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Clear browsing data for a specific site
 export async function clearBrowsingData(
@@ -18,64 +86,89 @@ export async function clearBrowsingData(
     };
   }
 
-  try {
-    const { dataTypes } = settings;
-
-    // Build removal options for chrome.browsingData
-    const removalOptions: chrome.browsingData.RemovalOptions = {
-      origins: [origin],
+  // Check if this is a restricted URL (can't clear data for chrome:// etc.)
+  if (!isScriptableUrl(url)) {
+    return {
+      success: false,
+      clearedTypes: [],
+      error: 'Cannot clear data for this page type',
     };
+  }
 
-    // Data types to remove via browsingData API
-    const dataToRemove: chrome.browsingData.DataTypeSet = {};
+  // Check whitelist (unless blacklisted - blacklist takes priority)
+  const blacklisted = isBlacklisted(url, settings.blacklist);
+  if (!blacklisted && isWhitelisted(url, settings.whitelist)) {
+    return {
+      success: false,
+      clearedTypes: [],
+      error: 'This site is whitelisted',
+    };
+  }
 
-    if (dataTypes.cache) {
-      dataToRemove.cache = true;
-      clearedTypes.push('Cache');
+  try {
+    const { dataTypes, timeRange } = settings;
+
+    // Add time range if not "all time"
+    const sinceTime = getTimeRangeMs(timeRange);
+
+    // Data types that support origin filtering
+    const originSupportedTypes: Array<[keyof typeof dataTypes, keyof chrome.browsingData.DataTypeSet, string]> = [
+      ['cache', 'cache', 'Cache'],
+      ['cacheStorage', 'cacheStorage', 'Cache Storage'],
+      ['cookies', 'cookies', 'Cookies'],
+      ['localStorage', 'localStorage', 'Local Storage'],
+      ['fileSystems', 'fileSystems', 'File Systems'],
+      ['indexedDB', 'indexedDB', 'Indexed DB'],
+      ['serviceWorkers', 'serviceWorkers', 'Service Workers'],
+      ['webSQL', 'webSQL', 'WebSQL'],
+    ];
+
+    // Data types that DON'T support origin filtering (clears ALL browser data)
+    const globalOnlyTypes: Array<[keyof typeof dataTypes, keyof chrome.browsingData.DataTypeSet, string]> = [
+      ['history', 'history', 'Browsing History'],
+      ['downloads', 'downloads', 'Download History'],
+      ['formData', 'formData', 'Form Data'],
+      ['passwords', 'passwords', 'Saved Passwords'],
+      ['pluginData', 'pluginData', 'Plugin Data'],
+    ];
+
+    // Build origin-filtered data to remove
+    const originDataToRemove: chrome.browsingData.DataTypeSet = {};
+    for (const [settingKey, apiKey, displayName] of originSupportedTypes) {
+      if (dataTypes[settingKey]) {
+        originDataToRemove[apiKey] = true;
+        clearedTypes.push(displayName);
+      }
     }
 
-    if (dataTypes.cacheStorage) {
-      dataToRemove.cacheStorage = true;
-      clearedTypes.push('Cache Storage');
+    // Build global data to remove (no origin filter)
+    const globalDataToRemove: chrome.browsingData.DataTypeSet = {};
+    for (const [settingKey, apiKey, displayName] of globalOnlyTypes) {
+      if (dataTypes[settingKey]) {
+        globalDataToRemove[apiKey] = true;
+        clearedTypes.push(displayName);
+      }
     }
 
-    if (dataTypes.cookies) {
-      dataToRemove.cookies = true;
-      clearedTypes.push('Cookies');
+    // Clear origin-filtered data
+    if (Object.keys(originDataToRemove).length > 0) {
+      const originOptions: chrome.browsingData.RemovalOptions = {
+        origins: [origin],
+      };
+      if (sinceTime > 0) {
+        originOptions.since = sinceTime;
+      }
+      await chrome.browsingData.remove(originOptions, originDataToRemove);
     }
 
-    if (dataTypes.fileSystems) {
-      dataToRemove.fileSystems = true;
-      clearedTypes.push('File Systems');
+    // Clear global data (no origin filter - affects all sites!)
+    if (Object.keys(globalDataToRemove).length > 0) {
+      const globalOptions: chrome.browsingData.RemovalOptions = {};
+      if (sinceTime > 0) {
+        globalOptions.since = sinceTime;
+      }
+      await chrome.browsingData.remove(globalOptions, globalDataToRemove);
     }
-
-    if (dataTypes.indexedDB) {
-      dataToRemove.indexedDB = true;
-      clearedTypes.push('Indexed DB');
-    }
-
-    if (dataTypes.localStorage) {
-      dataToRemove.localStorage = true;
-      clearedTypes.push('Local Storage');
-    }
-
-    if (dataTypes.serviceWorkers) {
-      dataToRemove.serviceWorkers = true;
-      clearedTypes.push('Service Workers');
-    }
-
-    if (dataTypes.webSQL) {
-      dataToRemove.webSQL = true;
-      clearedTypes.push('WebSQL');
-    }
-
-    // Clear via browsingData API
-    if (Object.keys(dataToRemove).length > 0) {
-      await chrome.browsingData.remove(removalOptions, dataToRemove);
-    }
-
-    // Session storage needs to be cleared via content script
-    // (handled separately in content script)
 
     return {
       success: true,
@@ -92,7 +185,15 @@ export async function clearBrowsingData(
 }
 
 // Clear session storage via content script execution
-export async function clearSessionStorage(tabId: number): Promise<boolean> {
+// Optimized: Check URL synchronously first, then try executeScript directly
+export async function clearSessionStorage(tabId: number, url?: string): Promise<boolean> {
+  // Fast synchronous check - no API call needed
+  if (url && !isScriptableUrl(url)) {
+    return false;
+  }
+
+  // Try directly - faster than pre-checking tab existence
+  // If tab doesn't exist or has navigated, executeScript will throw and we catch it
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -101,8 +202,8 @@ export async function clearSessionStorage(tabId: number): Promise<boolean> {
       },
     });
     return true;
-  } catch (error) {
-    console.error('Error clearing session storage:', error);
+  } catch {
+    // Silently fail - tab might have navigated, closed, be on error page, or restricted URL
     return false;
   }
 }

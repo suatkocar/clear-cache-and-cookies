@@ -1,58 +1,513 @@
+/* Floating Button - Modern Design */
 #clear-cache-floating-btn {
   position: fixed;
-  bottom: 20px;
-  left: 20px;
-  width: 48px;
-  height: 48px;
-  background: #0078D4;
-  border: 1px solid #30363d;
-  border-radius: 50%;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%);
+  border: none;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s ease;
+  cursor: grab;
+  box-shadow: 
+    0 4px 15px rgba(10, 132, 255, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
   z-index: 2147483647;
   color: white;
+  opacity: 0.9;
+  user-select: none;
+  touch-action: none;
+  transition: background 0.3s ease;
+}
+
+#clear-cache-floating-btn svg {
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.2));
 }
 
 #clear-cache-floating-btn:hover {
-  background: #006CBE;
-  transform: scale(1.05);
+  background: linear-gradient(135deg, #0a84ff 0%, #bf5af2 100%);
+  opacity: 1;
+  box-shadow: 
+    0 8px 25px rgba(10, 132, 255, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
-#clear-cache-floating-btn:active {
-  transform: scale(0.95);
+/* Close button - Minimal */
+#clear-cache-floating-btn .close-btn {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 18px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #374151;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
+#clear-cache-floating-btn:hover .close-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+
+#clear-cache-floating-btn .close-btn:hover {
+  background: #ff453a;
+  color: white;
+  transform: scale(1.1);
+}
+
+#clear-cache-floating-btn:active,
+#clear-cache-floating-btn.dragging {
+  cursor: grabbing;
+  opacity: 1;
+}
+
+/* ---- ANIMATION LOGIC ---- */
+
+/* Working State (Click/Loading) */
+#clear-cache-floating-btn.working,
 #clear-cache-floating-btn.loading {
-  animation: pulse 1s infinite;
   pointer-events: none;
 }
 
-#clear-cache-floating-btn.loading svg {
-  animation: spin 1s linear infinite;
+/* Sweep effect */
+#clear-cache-floating-btn.working svg .broom-body,
+#clear-cache-floating-btn.loading svg .broom-body {
+  animation: sweep 0.5s infinite ease-in-out alternate;
 }
 
+/* Bubbles animate when working */
+#clear-cache-floating-btn.working svg .broom-bubbles,
+#clear-cache-floating-btn.loading svg .broom-bubbles {
+  animation: dust-rise 0.6s infinite linear;
+}
+
+/* Success State */
 #clear-cache-floating-btn.success {
-  background: #238636;
+  background: #238636 !important;
+  transform: scale(1.1);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
+/* --- KEYFRAMES --- */
+
+/* Broom Sweep Left-Right */
+@keyframes sweep {
+  0% {
+    transform: rotate(-8deg) translateX(-1px);
+  }
+  100% {
+    transform: rotate(8deg) translateX(1px);
+  }
+}
+
+/* Bubbles / Dust Floating Effect */
+@keyframes dust-rise {
+  0% {
+    transform: translateY(0) scale(1);
   }
   50% {
-    opacity: 0.7;
+    transform: translateY(-3px) scale(1.1);
+  }
+  100% {
+    transform: translateY(0) scale(1);
   }
 }
 
-@keyframes spin {
+/* Floating Button Tooltip - Dynamic JS tooltip */
+.floating-btn-tooltip {
+  position: fixed;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 12px;
+  padding: 12px 16px;
+  min-width: 180px;
+  max-width: 280px;
+  box-shadow: 
+    0 12px 40px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(56, 139, 253, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  z-index: 2147483646;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  animation: fbt-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fbt-appear {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: scale(0.95) translateX(8px);
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: scale(1) translateX(0);
   }
+}
+
+.floating-btn-tooltip .fbt-title {
+  color: #58a6ff;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.floating-btn-tooltip .fbt-list {
+  color: #e6edf3;
+  font-size: 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.floating-btn-tooltip .fbt-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.floating-btn-tooltip .fbt-check {
+  color: #4ade80;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.floating-btn-tooltip .fbt-hint {
+  color: #8b949e;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+/* Context Menu - Modern Glassmorphism */
+#clear-cache-context-menu {
+  position: fixed;
+  background: rgba(22, 27, 34, 0.95);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: 12px;
+  padding: 0;
+  width: 280px;
+  overflow: hidden;
+  box-shadow: 
+    0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(56, 139, 253, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  animation: menuSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top left;
+}
+
+@keyframes menuSlideIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #f5f5f7;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-radius: 8px;
+  margin: 2px 0;
+  position: relative;
+}
+
+.context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateX(2px);
+}
+
+.context-menu-item:active {
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(0.98);
+}
+
+.context-menu-item .menu-icon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+.context-menu-item .menu-check {
+  margin-left: auto;
+  color: #30d158;
+  font-size: 14px;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.15s ease;
+}
+
+.context-menu-item.active .menu-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.context-menu-item.active {
+  background: rgba(48, 209, 88, 0.1);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  margin: 8px 12px;
+}
+
+.context-menu-item.clear-all {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.15), rgba(94, 92, 230, 0.15));
+  color: #5ac8fa;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.context-menu-item.clear-all:hover {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.25), rgba(94, 92, 230, 0.25));
+  transform: translateX(2px);
+}
+
+.context-menu-item.clear-all .menu-icon {
+  animation: sweep 2s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-15deg); }
+  75% { transform: rotate(15deg); }
+}
+
+/* Modern Menu Header with Tabs */
+.menu-header {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(13, 17, 23, 0.8);
+  border-bottom: 1px solid rgba(56, 139, 253, 0.15);
+}
+
+.menu-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: rgba(56, 139, 253, 0.1);
+  border: 1px solid rgba(56, 139, 253, 0.2);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.menu-tab:hover {
+  background: rgba(56, 139, 253, 0.2);
+  border-color: rgba(56, 139, 253, 0.4);
+  color: white;
+}
+
+.menu-tab.active {
+  background: linear-gradient(135deg, #388bfd, #58a6ff);
+  border-color: #58a6ff;
+  color: white;
+  font-weight: 600;
+}
+
+/* Data Types List */
+.menu-list {
+  padding: 4px 0;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border-left: 3px solid transparent;
+}
+
+.menu-row:hover {
+  background: rgba(56, 139, 253, 0.1);
+}
+
+.menu-row.active {
+  background: rgba(56, 139, 253, 0.15);
+  border-left-color: #388bfd;
+}
+
+.row-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+/* Menu Tooltip */
+#clear-cache-menu-tooltip {
+  position: fixed;
+  padding: 16px;
+  width: 300px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  z-index: 2147483647;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateX(8px);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+#clear-cache-menu-tooltip.visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.tip-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #58a6ff;
+  margin-bottom: 16px;
+}
+
+.tip-section {
+  margin-bottom: 12px;
+}
+
+.tip-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b949e;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.tip-text {
+  font-size: 13px;
+  color: #e6edf3;
+  line-height: 1.5;
+}
+
+.tip-status {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #30363d;
+  font-size: 13px;
+  font-weight: 500;
+  color: #8b949e;
+}
+
+.tip-status.active {
+  color: #3fb950;
+}
+
+.row-label {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.menu-row.active .row-label {
+  color: #58a6ff;
+  font-weight: 500;
+}
+
+.row-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.row-clear svg {
+  width: 18px;
+  height: 18px;
+}
+
+.menu-row:hover .row-clear {
+  opacity: 1;
+}
+
+.row-clear:hover {
+  transform: scale(1.15);
+}
+
+/* Clear All Button */
+.menu-clear-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  padding: 14px;
+  background: linear-gradient(135deg, #388bfd, #58a6ff);
+  border: none;
+  border-radius: 0 0 12px 12px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.menu-clear-all:hover {
+  filter: brightness(1.1);
+}
+
+.menu-clear-all .count {
+  color: #4ade80;
+  font-weight: 700;
+  margin: 0 2px;
+}
+
+.menu-clear-all.disabled {
+  background: linear-gradient(135deg, #4b5563, #6b7280);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.menu-clear-all.disabled:hover {
+  filter: none;
 }
