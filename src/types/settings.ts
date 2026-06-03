@@ -175,9 +175,10 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 // Message types for communication between scripts
-export type MessageAction = 
+export type MessageAction =
   | 'CLEAR_DATA'
   | 'GET_SETTINGS'
+  | 'GET_INIT_DATA'
   | 'SAVE_SETTINGS'
   | 'GET_CURRENT_TAB'
   | 'GET_COOKIE_COUNT'
@@ -203,6 +204,7 @@ export interface Message {
 export interface ClearDataPayload {
   url: string;
   settings: Settings;
+  tabId?: number;   // popup supplies this so the SW can skip a tabs.query round-trip
 }
 
 export interface ClearResult {

@@ -3,6 +3,35 @@
   'use strict';
 
   let floatingButton = null;
+  // Cached settings for the display paths (tooltip / right-click menu). Refreshed
+  // via the SETTINGS_UPDATED broadcast, so hovering no longer wakes the service
+  // worker on every mouseenter. Clear *operations* still fetch fresh settings.
+  let cachedSettings = null;
+
+  function getSettingsCached(callback) {
+    if (cachedSettings) {
+      callback(cachedSettings);
+      return;
+    }
+    safeSendMessage({ action: 'GET_SETTINGS' }, (settings) => {
+      if (settings) cachedSettings = settings;
+      callback(settings);
+    });
+  }
+
+  // Invalidate the display cache whenever settings change anywhere — including a
+  // sync from another device, which never produces a SETTINGS_UPDATED message.
+  try {
+    if (chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'sync' && changes.settings) {
+          cachedSettings = null;
+        }
+      });
+    }
+  } catch {
+    // Extension context invalidated — ignore.
+  }
 
   // Check if extension context is valid
   function isExtensionValid() {
@@ -32,8 +61,8 @@
   // Initialize
   async function init() {
     if (!isExtensionValid()) return;
-    
-    safeSendMessage({ action: 'GET_SETTINGS' }, (settings) => {
+
+    getSettingsCached((settings) => {
       if (settings && settings.behavior && settings.behavior.floatingButtonEnabled) {
         createFloatingButton();
       }
@@ -93,35 +122,36 @@
       } catch (e) {}
     }
     
-    // Keep button in viewport on resize
+    // Keep button in viewport on resize (rAF-throttled to avoid layout thrash)
+    let resizeRaf = null;
     window.addEventListener('resize', () => {
-      if (!floatingButton) return;
-      const rect = floatingButton.getBoundingClientRect();
-      const btnSize = 40;
-      const padding = 5;
-      let x = rect.left;
-      let y = rect.top;
-      x = Math.max(padding, Math.min(window.innerWidth - btnSize - padding, x));
-      y = Math.max(padding, Math.min(window.innerHeight - btnSize - padding, y));
-      floatingButton.style.left = x + 'px';
-      floatingButton.style.top = y + 'px';
-      floatingButton.style.right = 'auto';
-      floatingButton.style.bottom = 'auto';
-      // Close menu on resize
-      closeContextMenu();
-      hideTooltip();
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null;
+        if (!floatingButton) return;
+        const rect = floatingButton.getBoundingClientRect();
+        const btnSize = 40;
+        const padding = 5;
+        let x = rect.left;
+        let y = rect.top;
+        x = Math.max(padding, Math.min(window.innerWidth - btnSize - padding, x));
+        y = Math.max(padding, Math.min(window.innerHeight - btnSize - padding, y));
+        floatingButton.style.left = x + 'px';
+        floatingButton.style.top = y + 'px';
+        floatingButton.style.right = 'auto';
+        floatingButton.style.bottom = 'auto';
+        // Close menu on resize
+        closeContextMenu();
+        hideTooltip();
+      });
     });
 
-    // Mouse events
+    // Drag triggers on the button. The document-level move/up listeners are
+    // attached only while a drag is in progress (handleDragStart) and removed
+    // on release (handleDragEnd) — not always-on for every page.
     floatingButton.addEventListener('mousedown', handleDragStart);
-    document.addEventListener('mousemove', handleDragMove);
-    document.addEventListener('mouseup', handleDragEnd);
     floatingButton.addEventListener('contextmenu', handleRightClick);
-
-    // Touch events
     floatingButton.addEventListener('touchstart', handleDragStart, { passive: false });
-    document.addEventListener('touchmove', handleDragMove, { passive: false });
-    document.addEventListener('touchend', handleDragEnd);
 
     // Close button
     const closeBtn = floatingButton.querySelector('#clear-cache-close-btn');
@@ -147,8 +177,8 @@
 
   function showFloatingButtonTooltip() {
     if (!floatingButton || contextMenu) return; // Don't show if menu is open
-    
-    safeSendMessage({ action: 'GET_SETTINGS' }, (settings) => {
+
+    getSettingsCached((settings) => {
       if (!settings || !floatingButton || contextMenu) return;
       
       // Get active data types in dataTypeItems order with checkmarks
@@ -489,9 +519,9 @@
       contextMenu.remove();
     }
 
-    safeSendMessage({ action: 'GET_SETTINGS' }, (settings) => {
+    getSettingsCached((settings) => {
       if (!settings) return;
-      
+
       contextMenu = document.createElement('div');
       contextMenu.id = 'clear-cache-context-menu';
       
@@ -576,8 +606,9 @@
         return;
       }
 
-      // Create modified settings for specific type
-      const modifiedSettings = JSON.parse(JSON.stringify(settings));
+      // Create modified settings for specific type (structuredClone avoids the
+      // JSON serialize/parse round-trip).
+      const modifiedSettings = structuredClone(settings);
       
       if (!isAll) {
         // Clear only the selected type
@@ -598,6 +629,27 @@
         }
       });
     });
+  }
+
+  // Drag listeners live on document/window only while a drag is in progress.
+  // touchcancel + window blur guarantee cleanup even if the pointer is released
+  // off-window or the OS cancels the touch — otherwise they'd leak.
+  function attachDragListeners() {
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+    document.addEventListener('touchmove', handleDragMove, { passive: false });
+    document.addEventListener('touchend', handleDragEnd);
+    document.addEventListener('touchcancel', handleDragEnd);
+    window.addEventListener('blur', handleDragEnd);
+  }
+
+  function detachDragListeners() {
+    document.removeEventListener('mousemove', handleDragMove);
+    document.removeEventListener('mouseup', handleDragEnd);
+    document.removeEventListener('touchmove', handleDragMove);
+    document.removeEventListener('touchend', handleDragEnd);
+    document.removeEventListener('touchcancel', handleDragEnd);
+    window.removeEventListener('blur', handleDragEnd);
   }
 
   function handleDragStart(e) {
@@ -622,6 +674,9 @@
     isDragging = true;
     hasMoved = false;
     floatingButton.classList.add('dragging');
+
+    // Attach move/end listeners only for the duration of this drag.
+    attachDragListeners();
   }
 
   function handleDragMove(e) {
@@ -663,6 +718,11 @@
   function handleDragEnd() {
     if (!isDragging) return;
     isDragging = false;
+    detachDragListeners();
+
+    // The button may have been removed mid-drag (settings disabled it, etc.).
+    if (!floatingButton) return;
+
     floatingButton.classList.remove('dragging');
 
     // Save position
@@ -678,12 +738,10 @@
   // Remove floating button
   function removeFloatingButton() {
     if (floatingButton) {
+      isDragging = false; // ensure a mid-drag removal doesn't leave us "dragging"
       floatingButton.removeEventListener('mousedown', handleDragStart);
-      document.removeEventListener('mousemove', handleDragMove);
-      document.removeEventListener('mouseup', handleDragEnd);
       floatingButton.removeEventListener('touchstart', handleDragStart);
-      document.removeEventListener('touchmove', handleDragMove);
-      document.removeEventListener('touchend', handleDragEnd);
+      detachDragListeners();
       floatingButton.remove();
       floatingButton = null;
     }
@@ -728,6 +786,7 @@
     }
     if (message.action === 'SETTINGS_UPDATED') {
       const settings = message.payload;
+      cachedSettings = settings; // keep the display cache fresh
       if (settings && settings.behavior && settings.behavior.floatingButtonEnabled) {
         createFloatingButton();
       } else {

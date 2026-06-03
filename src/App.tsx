@@ -511,6 +511,7 @@ function App() {
   const [isClearing, setIsClearing] = useState(false);
   const [clearResult, setClearResult] = useState<ClearResult | null>(null);
   const [currentUrl, setCurrentUrl] = useState<string>('');
+  const [currentTabId, setCurrentTabId] = useState<number | undefined>(undefined);
   const [activeTab, setActiveTab] = useState<'main' | 'settings' | 'advanced' | 'stats'>('main');
   const [newWhitelistDomain, setNewWhitelistDomain] = useState('');
   const [cookieCount, setCookieCount] = useState(0);
@@ -518,23 +519,17 @@ function App() {
   const [newProfileName, setNewProfileName] = useState('');
 
   useEffect(() => {
-    chrome.runtime.sendMessage({ action: 'GET_SETTINGS' }, (response: Settings) => {
-      if (response) {
-        setSettings(response);
+    // Single round-trip on mount: settings + active tab + cookie count.
+    chrome.runtime.sendMessage(
+      { action: 'GET_INIT_DATA' },
+      (response: { settings?: Settings; currentTab?: chrome.tabs.Tab | null; cookieCount?: number } | undefined) => {
+        if (!response) return;
+        if (response.settings) setSettings(response.settings);
+        if (response.currentTab?.url) setCurrentUrl(response.currentTab.url);
+        if (typeof response.currentTab?.id === 'number') setCurrentTabId(response.currentTab.id);
+        if (typeof response.cookieCount === 'number') setCookieCount(response.cookieCount);
       }
-    });
-
-    chrome.runtime.sendMessage({ action: 'GET_CURRENT_TAB' }, (tab: chrome.tabs.Tab) => {
-      if (tab?.url) {
-        setCurrentUrl(tab.url);
-        // Get cookie count for current site
-        chrome.runtime.sendMessage({ action: 'GET_COOKIE_COUNT', payload: tab.url }, (response: { count: number }) => {
-          if (response?.count !== undefined) {
-            setCookieCount(response.count);
-          }
-        });
-      }
-    });
+    );
   }, []);
 
   const saveSettings = useCallback((newSettings: Settings) => {
@@ -551,7 +546,7 @@ function App() {
     chrome.runtime.sendMessage(
       {
         action: 'CLEAR_DATA',
-        payload: { url: currentUrl, settings },
+        payload: { url: currentUrl, tabId: currentTabId, settings },
       },
       (result: ClearResult) => {
         setIsClearing(false);
@@ -562,7 +557,7 @@ function App() {
         }
       }
     );
-  }, [currentUrl, isClearing, settings]);
+  }, [currentUrl, currentTabId, isClearing, settings]);
 
   const hasAutoClearedRef = useRef(false);
   useEffect(() => {

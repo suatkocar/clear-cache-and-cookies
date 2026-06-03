@@ -1,5 +1,6 @@
-import { storage, getCleanUrl, getDomain } from '../utils/storage';
-import { clearBrowsingData, clearSessionStorage, isScriptableUrl, canScriptTab } from '../utils/clearData';
+import { storage, getCleanUrl, getDomain, localStats } from '../utils/storage';
+import { clearBrowsingData, clearSessionStorage, isScriptableUrl, canScriptTab, isDomainBlocked, resolveClearTabId } from '../utils/clearData';
+import { recordClear, flushStats } from '../utils/statsRecorder';
 import type { Message, ClearDataPayload, Settings } from '../types/settings';
 
 // ==================== MESSAGE HANDLING ====================
@@ -11,13 +12,28 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
 
 async function handleMessage(
   message: Message,
-  _sender: chrome.runtime.MessageSender,
+  sender: chrome.runtime.MessageSender,
   sendResponse: (response?: unknown) => void
 ): Promise<void> {
   switch (message.action) {
     case 'GET_SETTINGS': {
-      const settings = await storage.get();
-      sendResponse(settings);
+      await flushStats(); // surface any debounced clears in the stats the popup shows
+      const [settings, statistics] = await Promise.all([storage.get(), localStats.get()]);
+      sendResponse({ ...settings, statistics });
+      break;
+    }
+
+    case 'GET_INIT_DATA': {
+      // Single round-trip for popup mount: settings + stats + active tab + cookie count.
+      await flushStats();
+      const [settings, statistics, tabs] = await Promise.all([
+        storage.get(),
+        localStats.get(),
+        chrome.tabs.query({ active: true, currentWindow: true }),
+      ]);
+      const tab = tabs[0];
+      const cookieCount = tab?.url ? await getCookieCount(tab.url) : 0;
+      sendResponse({ settings: { ...settings, statistics }, currentTab: tab ?? null, cookieCount });
       break;
     }
 
@@ -42,24 +58,36 @@ async function handleMessage(
     case 'CLEAR_DATA': {
       const payload = message.payload as ClearDataPayload;
       
-      const [result, tabs] = await Promise.all([
-        clearBrowsingData(payload.url, payload.settings),
-        chrome.tabs.query({ active: true, currentWindow: true })
-      ]);
-      
-      const currentTab = tabs[0];
-      
-      if (payload.settings.dataTypes.sessionStorage && currentTab?.id && currentTab?.url) {
-        const sessionCleared = await clearSessionStorage(currentTab.id, currentTab.url);
-        if (sessionCleared) {
-          result.clearedTypes.push('Session Storage');
-        }
+      // Fire browsing-data removal immediately.
+      const browsingPromise = clearBrowsingData(payload.url, payload.settings);
+
+      // Resolve the target tab WITHOUT a tabs.query round-trip when possible:
+      // the popup passes payload.tabId, a content-script message carries
+      // sender.tab. This removes the last sequential dependency on the hot path,
+      // so sessionStorage clearing starts truly in parallel with browsingData.
+      let tabId = resolveClearTabId(payload.tabId, sender.tab?.id);
+      let tabUrl = payload.url;
+      if (tabId == null) {
+        // Fallback (rare): neither source had a tab id — find the active tab.
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tabId = activeTab?.id;
+        tabUrl = activeTab?.url ?? payload.url;
       }
 
-      // Update statistics
+      const sessionPromise =
+        payload.settings.dataTypes.sessionStorage && tabId != null
+          ? clearSessionStorage(tabId, payload.url)
+          : Promise.resolve(false);
+
+      const [result, sessionCleared] = await Promise.all([browsingPromise, sessionPromise]);
+      if (sessionCleared) {
+        result.clearedTypes.push('Session Storage');
+      }
+
+      // Update statistics (debounced + local — off the response hot path)
       if (result.success) {
-        await updateStatistics(payload.url, result.clearedTypes);
-        
+        recordClear(getDomain(payload.url), result.clearedTypes);
+
         // Show notification if enabled
         if (payload.settings.behavior.showNotification) {
           showNotification(result.clearedTypes);
@@ -67,8 +95,8 @@ async function handleMessage(
       }
 
       // Handle reload after clear
-      if (result.success && payload.settings.behavior.reloadAfterClear && currentTab?.id && currentTab?.url) {
-        reloadTab(currentTab.id, currentTab.url, payload.settings.behavior.cleanUrlOnReload);
+      if (result.success && payload.settings.behavior.reloadAfterClear && tabId != null) {
+        reloadTab(tabId, tabUrl, payload.settings.behavior.cleanUrlOnReload);
       }
 
       // Update badge after clearing
@@ -101,8 +129,10 @@ async function handleMessage(
       const domain = message.payload as string;
       const settings = await storage.get();
       if (!settings.whitelist.includes(domain)) {
-        settings.whitelist.push(domain);
-        await storage.set(settings);
+        // Immutable update — never mutate the shared cached settings object.
+        const next: Settings = { ...settings, whitelist: [...settings.whitelist, domain] };
+        await storage.set(next);
+        notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       }
       sendResponse({ success: true });
       break;
@@ -111,37 +141,50 @@ async function handleMessage(
     case 'REMOVE_FROM_WHITELIST': {
       const domain = message.payload as string;
       const settings = await storage.get();
-      settings.whitelist = settings.whitelist.filter(d => d !== domain);
-      await storage.set(settings);
+      if (settings.whitelist.includes(domain)) {
+        const next: Settings = { ...settings, whitelist: settings.whitelist.filter(d => d !== domain) };
+        await storage.set(next);
+        notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
+      }
       sendResponse({ success: true });
       break;
     }
 
     case 'GET_STATISTICS': {
-      const settings = await storage.get();
-      sendResponse(settings.statistics);
+      await flushStats(); // surface any debounced clears
+      sendResponse(await localStats.get());
       break;
     }
 
     case 'EXPORT_SETTINGS': {
-      const settings = await storage.get();
-      sendResponse(settings);
+      await flushStats(); // include pending clears in the export
+      const [settings, statistics] = await Promise.all([storage.get(), localStats.get()]);
+      sendResponse({ ...settings, statistics });
       break;
     }
 
     case 'IMPORT_SETTINGS': {
       const newSettings = message.payload as Settings;
       await storage.set(newSettings);
+      // Statistics live in local storage; restore them there on import.
+      if (newSettings.statistics) {
+        await localStats.set(newSettings.statistics);
+      }
       updateContextMenu(newSettings);
       updateScheduledCleaning(newSettings);
+      notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: newSettings });
       sendResponse({ success: true });
       break;
     }
 
     case 'DISABLE_FLOATING_BUTTON': {
       const settings = await storage.get();
-      settings.behavior.floatingButtonEnabled = false;
-      await storage.set(settings);
+      const next: Settings = {
+        ...settings,
+        behavior: { ...settings.behavior, floatingButtonEnabled: false },
+      };
+      await storage.set(next);
+      notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       sendResponse({ success: true });
       break;
     }
@@ -150,32 +193,39 @@ async function handleMessage(
       const profileId = message.payload as string;
       const settings = await storage.get();
       const profile = settings.profiles.find(p => p.id === profileId);
-      
+
       if (profile) {
-        // Reset all data types to false first
-        Object.keys(settings.dataTypes).forEach(key => {
-          settings.dataTypes[key as keyof typeof settings.dataTypes] = false;
+        // Build a fresh dataTypes object (all off, then profile on) — immutable.
+        const nextDataTypes = { ...settings.dataTypes };
+        (Object.keys(nextDataTypes) as Array<keyof typeof nextDataTypes>).forEach((key) => {
+          nextDataTypes[key] = false;
         });
-        // Apply profile data types
         Object.entries(profile.dataTypes).forEach(([key, value]) => {
-          settings.dataTypes[key as keyof typeof settings.dataTypes] = value as boolean;
+          nextDataTypes[key as keyof typeof nextDataTypes] = value as boolean;
         });
-        settings.activeProfile = profileId;
-        await storage.set(settings);
-        updateContextMenu(settings);
+        const next: Settings = { ...settings, dataTypes: nextDataTypes, activeProfile: profileId };
+        await storage.set(next);
+        updateContextMenu(next);
+        // Keep content-script caches (tooltip/menu) in sync with the new selection.
+        notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       }
       sendResponse({ success: true });
       break;
     }
 
     case 'TOGGLE_DATA_TYPE': {
-      const dataType = message.payload as string;
+      const dataType = message.payload as keyof Settings['dataTypes'];
       const settings = await storage.get();
-      settings.dataTypes[dataType as keyof typeof settings.dataTypes] = 
-        !settings.dataTypes[dataType as keyof typeof settings.dataTypes];
-      settings.activeProfile = ''; // Clear active profile when manually changing
-      await storage.set(settings);
-      updateContextMenu(settings);
+      const next: Settings = {
+        ...settings,
+        dataTypes: { ...settings.dataTypes, [dataType]: !settings.dataTypes[dataType] },
+        activeProfile: '', // Clear active profile when manually changing
+      };
+      await storage.set(next);
+      updateContextMenu(next);
+      // Broadcast so every content script refreshes its cached settings (the
+      // floating-button tooltip reads dataTypes from that cache).
+      notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       sendResponse({ success: true });
       break;
     }
@@ -259,15 +309,16 @@ chrome.commands.onCommand.addListener(async (command) => {
     });
     
     // Clear browsing data and session storage in parallel
-    const clearPromises: Promise<unknown>[] = [
-      clearBrowsingData(currentUrl, settings)
-    ];
-    
-    if (settings.dataTypes.sessionStorage) {
-      clearPromises.push(clearSessionStorage(tabId, currentUrl));
+    const browsingPromise = clearBrowsingData(currentUrl, settings);
+    const sessionPromise = settings.dataTypes.sessionStorage
+      ? clearSessionStorage(tabId, currentUrl)
+      : Promise.resolve(false);
+
+    const [result, sessionCleared] = await Promise.all([browsingPromise, sessionPromise]);
+    // Report sessionStorage in clearedTypes (parity with the CLEAR_DATA path).
+    if (sessionCleared) {
+      result.clearedTypes.push('Session Storage');
     }
-    
-    const [result] = await Promise.all(clearPromises) as [Awaited<ReturnType<typeof clearBrowsingData>>];
 
     // Notify content script that clear completed
     chrome.tabs.sendMessage(tabId, { action: 'KEYBOARD_CLEAR_COMPLETE', payload: { success: result.success } }).catch(() => {
@@ -276,9 +327,9 @@ chrome.commands.onCommand.addListener(async (command) => {
 
     // Handle successful clear
     if (result.success) {
-      // Update statistics
-      await updateStatistics(currentUrl, result.clearedTypes);
-      
+      // Update statistics (debounced + local)
+      recordClear(getDomain(currentUrl), result.clearedTypes);
+
       // Show notification if enabled
       if (settings.behavior.showNotification) {
         showNotification(result.clearedTypes);
@@ -301,13 +352,25 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   const settings = await storage.get();
-  
+
   if (details.reason === 'install') {
     await storage.set(settings);
   }
-  
+
+  // One-time migration: statistics used to live inside synced settings; move
+  // them to local storage (their new home) if local is still empty.
+  const existingLocal = await localStats.get();
+  if (existingLocal.totalClears === 0 && settings.statistics && settings.statistics.totalClears > 0) {
+    await localStats.set(settings.statistics);
+  }
+
   // Initialize all features
   initializeFeatures(settings);
+});
+
+// Flush any pending (debounced) statistics before the service worker suspends.
+chrome.runtime.onSuspend.addListener(() => {
+  void flushStats();
 });
 
 // Initialize features on extension load (covers reload scenario)
@@ -383,26 +446,8 @@ chrome.tabs.onActivated.addListener(async () => {
   }
 });
 
-chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete') {
-    const settings = await storage.get();
-    if (settings.behavior.showBadge) {
-      updateBadge();
-    }
-    
-    // Auto-clear for blacklisted sites
-    if (tab.url && isScriptableUrl(tab.url)) {
-      const domain = getDomain(tab.url);
-      if (domain && settings.blacklist.includes(domain)) {
-        console.log(`[Clear Cache] Auto-clearing blacklisted site: ${domain}`);
-        const result = await clearBrowsingData(tab.url, settings);
-        if (result.success && settings.behavior.showNotification) {
-          showNotification([`🚫 Auto-cleared blacklisted: ${domain}`, ...result.clearedTypes]);
-        }
-      }
-    }
-  }
-});
+// Badge refresh + blacklist auto-clear on tab completion are handled by the
+// single consolidated onUpdated listener in the TAB CLOSE section below.
 
 // ==================== CONTEXT MENU ====================
 
@@ -490,8 +535,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const result = await clearBrowsingData(tab.url, settings);
     
     if (result.success) {
-      await updateStatistics(tab.url, result.clearedTypes);
-      
+      recordClear(getDomain(tab.url), result.clearedTypes);
+
       if (settings.behavior.showNotification) {
         showNotification(result.clearedTypes);
       }
@@ -501,20 +546,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
   } else if (menuId.startsWith('clear-')) {
-    // Clear specific data type
+    // Clear specific data type — build a fresh settings object (enable only the
+    // selected type) without cloning or mutating the shared cache.
     const dataType = menuId.replace('clear-', '');
-    const modifiedSettings = JSON.parse(JSON.stringify(settings));
-    
-    // Disable all, enable only selected
-    Object.keys(modifiedSettings.dataTypes).forEach(key => {
-      modifiedSettings.dataTypes[key] = (key === dataType);
+    const nextDataTypes = { ...settings.dataTypes };
+    (Object.keys(nextDataTypes) as Array<keyof typeof nextDataTypes>).forEach((key) => {
+      nextDataTypes[key] = (key === dataType);
     });
-    
+    const modifiedSettings: Settings = { ...settings, dataTypes: nextDataTypes };
+
     const result = await clearBrowsingData(tab.url, modifiedSettings);
     
     if (result.success) {
-      await updateStatistics(tab.url, result.clearedTypes);
-      
+      recordClear(getDomain(tab.url), result.clearedTypes);
+
       if (settings.behavior.showNotification) {
         showNotification(result.clearedTypes);
       }
@@ -526,19 +571,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   } else if (menuId === 'add-to-whitelist') {
     const domain = getDomain(tab.url);
     if (domain && !settings.whitelist.includes(domain)) {
-      settings.whitelist.push(domain);
-      // Remove from blacklist if present
-      settings.blacklist = settings.blacklist.filter(d => d !== domain);
-      await storage.set(settings);
+      // Immutable update (new array refs) so caches/Sets keyed on identity refresh.
+      const next: Settings = {
+        ...settings,
+        whitelist: [...settings.whitelist, domain],
+        blacklist: settings.blacklist.filter(d => d !== domain),
+      };
+      await storage.set(next);
+      notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       showNotification([`Added ${domain} to whitelist`]);
     }
   } else if (menuId === 'add-to-blacklist') {
     const domain = getDomain(tab.url);
     if (domain && !settings.blacklist.includes(domain)) {
-      settings.blacklist.push(domain);
-      // Remove from whitelist if present
-      settings.whitelist = settings.whitelist.filter(d => d !== domain);
-      await storage.set(settings);
+      const next: Settings = {
+        ...settings,
+        blacklist: [...settings.blacklist, domain],
+        whitelist: settings.whitelist.filter(d => d !== domain),
+      };
+      await storage.set(next);
+      notifyAllTabs({ action: 'SETTINGS_UPDATED', payload: next });
       showNotification([`Added ${domain} to blacklist (auto-clear)`]);
     }
   }
@@ -568,12 +620,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       const result = await clearBrowsingData(currentTab.url, settings);
       
       if (result.success) {
-        // Update last run time
-        settings.schedule.lastRun = Date.now();
-        await storage.set(settings);
-        
-        await updateStatistics(currentTab.url, result.clearedTypes);
-        
+        // Record last scheduled run locally — avoids a full settings sync-write
+        // on every alarm (the value isn't surfaced in the UI).
+        chrome.storage.local.set({ scheduleLastRun: Date.now() });
+
+        recordClear(getDomain(currentTab.url), result.clearedTypes);
+
         if (settings.behavior.showNotification) {
           showNotification(result.clearedTypes);
         }
@@ -587,25 +639,60 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Track tab URLs for clearOnTabClose feature
 const tabUrls = new Map<number, string>();
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tab.url && changeInfo.status === 'complete') {
-    tabUrls.set(tabId, tab.url);
+// Blacklist Set cached against the blacklist array reference. storage.get()
+// returns a stable cached settings object until settings actually change, so we
+// rebuild the Set only then — keeping per-tab-completion lookups at O(labels).
+let blacklistRef: string[] | null = null;
+let blacklistSet = new Set<string>();
+function blacklistSetFor(list: string[]): Set<string> {
+  if (list !== blacklistRef) {
+    blacklistSet = new Set(list);
+    blacklistRef = list;
   }
+  return blacklistSet;
+}
+
+// Single consolidated tab-completion listener: track URL (cheap, no read),
+// then handle badge + blacklist auto-clear behind cheap guards.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (tab.url) tabUrls.set(tabId, tab.url);
+  void handleTabComplete(tab);
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-  const settings = await storage.get();
-  const tabUrl = tabUrls.get(tabId);
-  tabUrls.delete(tabId); // Clean up
-  
-  if (settings.behavior.clearOnTabClose && !removeInfo.isWindowClosing && tabUrl) {
-    // Only clear if it was a scriptable URL
-    if (isScriptableUrl(tabUrl)) {
-      const result = await clearBrowsingData(tabUrl, settings);
+async function handleTabComplete(tab: chrome.tabs.Tab): Promise<void> {
+  const settings = await storage.get(); // cached in-memory after first read
+
+  if (settings.behavior.showBadge) {
+    updateBadge();
+  }
+
+  if (tab.url && isScriptableUrl(tab.url)) {
+    const domain = getDomain(tab.url);
+    if (domain && isDomainBlocked(domain, blacklistSetFor(settings.blacklist))) {
+      console.log(`[Clear Cache] Auto-clearing blacklisted site: ${domain}`);
+      const result = await clearBrowsingData(tab.url, settings);
       if (result.success) {
-        await updateStatistics(tabUrl, result.clearedTypes);
+        recordClear(domain, result.clearedTypes); // count auto-clears like every other path
+        if (settings.behavior.showNotification) {
+          showNotification([`🚫 Auto-cleared blacklisted: ${domain}`, ...result.clearedTypes]);
+        }
       }
     }
+  }
+}
+
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+  const tabUrl = tabUrls.get(tabId);
+  tabUrls.delete(tabId); // Clean up
+  if (removeInfo.isWindowClosing || !tabUrl || !isScriptableUrl(tabUrl)) return;
+
+  const settings = await storage.get();
+  if (!settings.behavior.clearOnTabClose) return;
+
+  const result = await clearBrowsingData(tabUrl, settings);
+  if (result.success) {
+    recordClear(getDomain(tabUrl), result.clearedTypes);
   }
 });
 
@@ -631,28 +718,5 @@ function showNotification(clearedTypes: string[]): void {
 }
 
 // ==================== STATISTICS ====================
-
-async function updateStatistics(url: string, clearedTypes: string[]): Promise<void> {
-  // Always get fresh settings from storage to avoid overwriting user settings
-  const currentSettings = await storage.get();
-  const domain = getDomain(url);
-  const stats = currentSettings.statistics;
-  
-  stats.totalClears++;
-  stats.lastClearTime = Date.now();
-  
-  if (clearedTypes.includes('Cookies')) {
-    stats.cookiesCleared += 10; // Approximate
-  }
-  if (clearedTypes.includes('Cache') || clearedTypes.includes('Cache Storage')) {
-    stats.cacheCleared += 5; // Approximate MB
-  }
-  
-  // Keep last 10 sites
-  if (domain) {
-    stats.sitesCleared = [domain, ...stats.sitesCleared.filter(s => s !== domain)].slice(0, 10);
-  }
-  
-  currentSettings.statistics = stats;
-  await storage.set(currentSettings);
-}
+// Statistics are recorded via recordClear() (debounced) and persisted in
+// chrome.storage.local by ../utils/statsRecorder. See ../utils/storage applyClear.

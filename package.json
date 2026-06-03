@@ -1,7 +1,7 @@
 {
   "name": "clear-cache-and-cookies",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Clear cache and cookies for the current website with just one click",
   "type": "module",
   "scripts": {
@@ -9,30 +9,35 @@
     "build": "tsc -b && vite build && npm run build:copy",
     "build:copy": "node scripts/copy-files.js",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "zip": "npm run build && node scripts/create-zip.js"
   },
   "dependencies": {
     "@tippyjs/react": "^4.2.6",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tippy.js": "^6.3.7"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
-    "@types/chrome": "^0.1.31",
-    "@types/node": "^24.10.1",
-    "@types/react": "^19.2.5",
+    "@eslint/js": "^10.0.1",
+    "@types/chrome": "^0.1.42",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
-    "archiver": "^7.0.1",
-    "eslint": "^9.39.1",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.4.24",
-    "globals": "^16.5.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "archiver": "^8.0.0",
+    "esbuild": "^0.28.0",
+    "eslint": "^10.4.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "happy-dom": "^20.9.0",
     "sharp": "^0.34.5",
-    "typescript": "~5.9.3",
-    "typescript-eslint": "^8.46.4",
-    "vite": "^7.2.4"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   }
 }
